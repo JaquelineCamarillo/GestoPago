@@ -14,6 +14,7 @@ import com.proyecto.servicios.repositorys.gestopago.GestoPagoProductoRepository;
 import com.proyecto.servicios.service.GestoPagoProductService;
 import com.proyecto.servicios.service.GestoPagoTokenService;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -27,24 +28,28 @@ public class GestoPagoProductServiceImpl implements GestoPagoProductService {
 
     private static final String BEARER_PREFIX = "Bearer ";
     private static final String CODIGO_EXITO = "01";
+    private static final String REDIS_KEY_PRODUCTOS = "gestopago:productos";
 
     private final GestoPagoProductClient gestoPagoProductClient;
     private final GestoPagoTokenService gestoPagoTokenService;
     private final GestoPagoProductoRepository productoRepository;
     private final GestoPagoProductMapper productMapper;
+    private final RedisTemplate<String, Object> redisTemplate;
 
     public GestoPagoProductServiceImpl(GestoPagoProductClient gestoPagoProductClient,
                                        GestoPagoTokenService gestoPagoTokenService,
                                        GestoPagoProductoRepository productoRepository,
-                                       GestoPagoProductMapper productMapper) {
+                                       GestoPagoProductMapper productMapper,
+                                       RedisTemplate<String, Object> redisTemplate) {
         this.gestoPagoProductClient = gestoPagoProductClient;
         this.gestoPagoTokenService = gestoPagoTokenService;
         this.productoRepository = productoRepository;
         this.productMapper = productMapper;
+        this.redisTemplate = redisTemplate;
     }
 
     @Override
-    @Scheduled(cron = "${gestopago.productos.sync-cron:0 0 3 * * *}")
+    @Scheduled(cron = "${gestopago.productos.sync-cron:0 0 6 * * *}")
     @Transactional
     public void sincronizarCatalogo() {
         log.info("INICIO sincronizacion de catalogo GestoPago (getProductList.do)");
@@ -60,10 +65,17 @@ public class GestoPagoProductServiceImpl implements GestoPagoProductService {
                 throw new GestoPagoBadResponseException(texto, codigo);
             }
 
-            List<GestoPagoProducto> guardados = response.getProductos() == null
-                    ? List.of()
-                    : response.getProductos().stream().map(this::guardarOActualizar).collect(Collectors.toList());
-            int total = guardados.size();
+            List<GestoPagoProductoXml> productosXml = response.getProductos() == null
+                    ? List.of() : response.getProductos();
+
+            // GestoPago respondio 200 con exito: se guarda primero en Redis. Solo si Redis
+            // no esta disponible (caido/sin conexion) se usa Postgres como respaldo.
+            int total;
+            if (guardarEnRedis(productosXml)) {
+                total = productosXml.size();
+            } else {
+                total = guardarEnBaseDeDatos(productosXml);
+            }
 
             log.info("FIN sincronizacion de catalogo GestoPago - productos sincronizados={}", total);
         } catch (GestoPagoIntegrationException e) {
@@ -77,11 +89,54 @@ public class GestoPagoProductServiceImpl implements GestoPagoProductService {
 
     @Override
     public List<GestoPagoProductoResponse> listarProductosDisponibles() {
+        List<GestoPagoProductoResponse> desdeRedis = leerDesdeRedis();
+        if (desdeRedis != null) {
+            log.info("Catalogo leido desde Redis ({} productos)", desdeRedis.size());
+            return desdeRedis;
+        }
+
+        log.warn("Redis no disponible para lectura, usando base de datos local como respaldo");
         return productoRepository.findByActivoTrue().stream()
-                .map(p -> new GestoPagoProductoResponse(
-                        p.getIdProducto(), p.getIdServicio(), p.getNombreServicio(),
-                        p.getNombreProducto(), p.getPrecio()))
+                .map(this::aResponse)
                 .collect(Collectors.toList());
+    }
+
+    /** Intenta guardar el catalogo en Redis. Devuelve false si Redis no esta disponible. */
+    private boolean guardarEnRedis(List<GestoPagoProductoXml> productosXml) {
+        try {
+            List<GestoPagoProductoResponse> productos = productosXml.stream()
+                    .map(this::aResponse)
+                    .collect(Collectors.toList());
+            redisTemplate.opsForValue().set(REDIS_KEY_PRODUCTOS, productos);
+            log.info("Catalogo guardado en Redis ({} productos)", productos.size());
+            return true;
+        } catch (Exception e) {
+            log.warn("Redis no disponible al guardar el catalogo, se usara la base de datos local: {}", e.getMessage());
+            return false;
+        }
+    }
+
+    /** Lee el catalogo desde Redis. Devuelve null (no lanza) si Redis no esta disponible. */
+    @SuppressWarnings("unchecked")
+    private List<GestoPagoProductoResponse> leerDesdeRedis() {
+        try {
+            Object cacheado = redisTemplate.opsForValue().get(REDIS_KEY_PRODUCTOS);
+            if (cacheado instanceof List<?>) {
+                return (List<GestoPagoProductoResponse>) cacheado;
+            }
+            return null;
+        } catch (Exception e) {
+            log.warn("Redis no disponible al leer el catalogo: {}", e.getMessage());
+            return null;
+        }
+    }
+
+    private int guardarEnBaseDeDatos(List<GestoPagoProductoXml> productosXml) {
+        List<GestoPagoProducto> guardados = productosXml.stream()
+                .map(this::guardarOActualizar)
+                .collect(Collectors.toList());
+        log.info("Catalogo guardado en base de datos local ({} productos)", guardados.size());
+        return guardados.size();
     }
 
     private GestoPagoProducto guardarOActualizar(GestoPagoProductoXml xml) {
@@ -99,10 +154,20 @@ public class GestoPagoProductServiceImpl implements GestoPagoProductService {
         return productoRepository.save(entidad);
     }
 
+    private GestoPagoProductoResponse aResponse(GestoPagoProductoXml xml) {
+        return new GestoPagoProductoResponse(
+                xml.getIdProducto(), xml.getIdServicio(), xml.getServicio(), xml.getProducto(), xml.getPrecio());
+    }
+
+    private GestoPagoProductoResponse aResponse(GestoPagoProducto entidad) {
+        return new GestoPagoProductoResponse(
+                entidad.getIdProducto(), entidad.getIdServicio(), entidad.getNombreServicio(),
+                entidad.getNombreProducto(), entidad.getPrecio());
+    }
+
     /**
      * Invoca getProductList.do. Si el token expira justo al usarlo, se fuerza UNA
-     * renovacion y se reintenta una sola vez (evita loops infinitos ante un problema real
-     * de credenciales).
+     * renovacion y se reintenta una sola vez.
      */
     private GestoPagoProductListXmlResponse invocarConReintentoPorTokenExpirado() {
         String token = gestoPagoTokenService.obtenerTokenBearer();
