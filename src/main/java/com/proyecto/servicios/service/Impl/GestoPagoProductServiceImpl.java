@@ -60,8 +60,10 @@ public class GestoPagoProductServiceImpl implements GestoPagoProductService {
                 throw new GestoPagoBadResponseException(texto, codigo);
             }
 
-            int total = response.getProductos() == null ? 0
-                    : (int) response.getProductos().stream().map(this::guardarOActualizar).count();
+            List<GestoPagoProducto> guardados = response.getProductos() == null
+                    ? List.of()
+                    : response.getProductos().stream().map(this::guardarOActualizar).collect(Collectors.toList());
+            int total = guardados.size();
 
             log.info("FIN sincronizacion de catalogo GestoPago - productos sincronizados={}", total);
         } catch (GestoPagoIntegrationException e) {
