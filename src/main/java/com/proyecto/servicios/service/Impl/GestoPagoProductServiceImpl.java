@@ -29,6 +29,7 @@ public class GestoPagoProductServiceImpl implements GestoPagoProductService {
     private static final String BEARER_PREFIX = "Bearer ";
     private static final String CODIGO_EXITO = "01";
     private static final String REDIS_KEY_PRODUCTOS = "gestopago:productos";
+    private static final int TIPO_FRONT_POR_DEFECTO = 0;
 
     private final GestoPagoProductClient gestoPagoProductClient;
     private final GestoPagoTokenService gestoPagoTokenService;
@@ -68,8 +69,6 @@ public class GestoPagoProductServiceImpl implements GestoPagoProductService {
             List<GestoPagoProductoXml> productosXml = response.getProductos() == null
                     ? List.of() : response.getProductos();
 
-            // GestoPago respondio 200 con exito: se guarda primero en Redis. Solo si Redis
-            // no esta disponible (caido/sin conexion) se usa Postgres como respaldo.
             int total;
             if (guardarEnRedis(productosXml)) {
                 total = productosXml.size();
@@ -88,20 +87,26 @@ public class GestoPagoProductServiceImpl implements GestoPagoProductService {
     }
 
     @Override
-    public List<GestoPagoProductoResponse> listarProductosDisponibles() {
-        List<GestoPagoProductoResponse> desdeRedis = leerDesdeRedis();
-        if (desdeRedis != null) {
-            log.info("Catalogo leido desde Redis ({} productos)", desdeRedis.size());
-            return desdeRedis;
+    public List<GestoPagoProductoResponse> listarProductosDisponibles(Integer tipoFront) {
+        List<GestoPagoProductoResponse> catalogo = leerDesdeRedis();
+
+        if (catalogo != null) {
+            log.info("Catalogo leido desde Redis ({} productos)", catalogo.size());
+        } else {
+            log.warn("Redis no disponible para lectura, usando base de datos local como respaldo");
+            catalogo = productoRepository.findByActivoTrue().stream()
+                    .map(this::aResponse)
+                    .collect(Collectors.toList());
         }
 
-        log.warn("Redis no disponible para lectura, usando base de datos local como respaldo");
-        return productoRepository.findByActivoTrue().stream()
-                .map(this::aResponse)
+        if (tipoFront == null) {
+            return catalogo;
+        }
+        return catalogo.stream()
+                .filter(p -> tipoFront.equals(p.getTipoFront()))
                 .collect(Collectors.toList());
     }
 
-    /** Intenta guardar el catalogo en Redis. Devuelve false si Redis no esta disponible. */
     private boolean guardarEnRedis(List<GestoPagoProductoXml> productosXml) {
         try {
             List<GestoPagoProductoResponse> productos = productosXml.stream()
@@ -116,15 +121,11 @@ public class GestoPagoProductServiceImpl implements GestoPagoProductService {
         }
     }
 
-    /** Lee el catalogo desde Redis. Devuelve null (no lanza) si Redis no esta disponible. */
     @SuppressWarnings("unchecked")
     private List<GestoPagoProductoResponse> leerDesdeRedis() {
         try {
             Object cacheado = redisTemplate.opsForValue().get(REDIS_KEY_PRODUCTOS);
-            if (cacheado instanceof List<?>) {
-                return (List<GestoPagoProductoResponse>) cacheado;
-            }
-            return null;
+            return (cacheado instanceof List<?>) ? (List<GestoPagoProductoResponse>) cacheado : null;
         } catch (Exception e) {
             log.warn("Redis no disponible al leer el catalogo: {}", e.getMessage());
             return null;
@@ -151,24 +152,26 @@ public class GestoPagoProductServiceImpl implements GestoPagoProductService {
                     nuevo.setActivo(true);
                     return nuevo;
                 });
+        if (entidad.getTipoFront() == null) {
+            entidad.setTipoFront(TIPO_FRONT_POR_DEFECTO);
+        }
         return productoRepository.save(entidad);
     }
 
     private GestoPagoProductoResponse aResponse(GestoPagoProductoXml xml) {
+        Integer tipoFront = xml.getTipoFront() != null ? xml.getTipoFront() : TIPO_FRONT_POR_DEFECTO;
         return new GestoPagoProductoResponse(
-                xml.getIdProducto(), xml.getIdServicio(), xml.getServicio(), xml.getProducto(), xml.getPrecio());
+                xml.getIdProducto(), xml.getIdServicio(), xml.getServicio(), xml.getProducto(),
+                xml.getPrecio(), tipoFront);
     }
 
     private GestoPagoProductoResponse aResponse(GestoPagoProducto entidad) {
+        Integer tipoFront = entidad.getTipoFront() != null ? entidad.getTipoFront() : TIPO_FRONT_POR_DEFECTO;
         return new GestoPagoProductoResponse(
                 entidad.getIdProducto(), entidad.getIdServicio(), entidad.getNombreServicio(),
-                entidad.getNombreProducto(), entidad.getPrecio());
+                entidad.getNombreProducto(), entidad.getPrecio(), tipoFront);
     }
 
-    /**
-     * Invoca getProductList.do. Si el token expira justo al usarlo, se fuerza UNA
-     * renovacion y se reintenta una sola vez.
-     */
     private GestoPagoProductListXmlResponse invocarConReintentoPorTokenExpirado() {
         String token = gestoPagoTokenService.obtenerTokenBearer();
         try {

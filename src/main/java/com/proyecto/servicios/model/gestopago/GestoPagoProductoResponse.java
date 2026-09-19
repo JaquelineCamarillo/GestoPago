@@ -13,4 +13,5 @@ public class GestoPagoProductoResponse {
     private String nombreServicio;
     private String nombreProducto;
     private String precio;
+    private Integer tipoFront;
 }
