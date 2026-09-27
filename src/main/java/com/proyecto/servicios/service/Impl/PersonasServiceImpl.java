@@ -1,6 +1,6 @@
 package com.proyecto.servicios.service.Impl;
 
-import com.proyecto.servicios.entity.sf.Personas;
+import com.proyecto.servicios.entity.sf.Cliente;
 import com.proyecto.servicios.model.EliminaPersonaRequest;
 import com.proyecto.servicios.model.GenericResponse;
 import com.proyecto.servicios.model.PersonaResponse;
@@ -22,7 +22,7 @@ public class PersonasServiceImpl implements PersonaService {
     @Override
     public PersonaResponse creaPersona(PersonasRequest personasRequest) {
         PersonaResponse person=new PersonaResponse();
-     Personas persona=new Personas();
+     Cliente persona=new Cliente();
      persona.setNombre(personasRequest.getNombre());
      persona.setApellidoMaterno(personasRequest.getApellidoMaterno());
      persona.setApellidoP(personasRequest.getApellidoP());
@@ -38,9 +38,9 @@ public class PersonasServiceImpl implements PersonaService {
     public GenericResponse eliminaPersona(EliminaPersonaRequest eliminaPersonaRequest) {
         GenericResponse genericResponse=new GenericResponse();
 
-        Optional<Personas> existePersona=personasRepository.findByNombre(eliminaPersonaRequest.getNombre());
+        Optional<Cliente> existePersona=personasRepository.findByNombre(eliminaPersonaRequest.getNombre());
         if(existePersona.isPresent()){
-            Personas personaElimina=existePersona.get();
+            Cliente personaElimina=existePersona.get();
             personasRepository.delete(personaElimina);
             genericResponse.setCodigo(0);
             genericResponse.setMensaje("La persona ha sido eliminada correctamente");
@@ -56,9 +56,9 @@ public class PersonasServiceImpl implements PersonaService {
     @Override
     public GenericResponse actualizaPersona(PersonasRequest personasRequest) {
         GenericResponse genericResponse=new GenericResponse();
-        Optional<Personas> existePersona=personasRepository.findByNombre(personasRequest.getNombre());
+        Optional<Cliente> existePersona=personasRepository.findByNombre(personasRequest.getNombre());
         if(existePersona.isPresent()){
-            Personas personaActualiza=existePersona.get();
+            Cliente personaActualiza=existePersona.get();
             personaActualiza.setApellidoP(personasRequest.getApellidoP());
             personaActualiza.setApellidoMaterno(personasRequest.getApellidoMaterno());
             personasRepository.save(personaActualiza);
