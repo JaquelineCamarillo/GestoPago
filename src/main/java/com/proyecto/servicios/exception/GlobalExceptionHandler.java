@@ -8,6 +8,7 @@ import com.proyecto.servicios.exception.gestopago.GestoPagoTimeoutException;
 import com.proyecto.servicios.exception.gestopago.GestoPagoTokenUnavailableException;
 import com.proyecto.servicios.model.GenericResponse;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
@@ -46,6 +47,50 @@ public class GlobalExceptionHandler {
         log.error("Error no controlado en la API", ex);
         return construir(GestoPagoCodigoResultado.ERROR_INTERNO,
                 "Ocurrio un error inesperado. Contacte al administrador si el problema persiste.");
+    }
+
+    @ExceptionHandler(com.proyecto.servicios.exception.clientes.ClienteNoEncontradoException.class)
+    public ResponseEntity<GenericResponse> handleClienteNoEncontrado(
+            com.proyecto.servicios.exception.clientes.ClienteNoEncontradoException ex) {
+        return construirClientes(HttpStatus.NOT_FOUND, ex.getMessage());
+    }
+
+    @ExceptionHandler(com.proyecto.servicios.exception.clientes.CuentaNoEncontradaException.class)
+    public ResponseEntity<GenericResponse> handleCuentaNoEncontrada(
+            com.proyecto.servicios.exception.clientes.CuentaNoEncontradaException ex) {
+        return construirClientes(HttpStatus.NOT_FOUND, ex.getMessage());
+    }
+
+    @ExceptionHandler({
+            com.proyecto.servicios.exception.clientes.CurpDuplicadaException.class,
+            com.proyecto.servicios.exception.clientes.RfcDuplicadoException.class,
+            com.proyecto.servicios.exception.clientes.CorreoDuplicadoException.class,
+            com.proyecto.servicios.exception.clientes.ClienteYaRegistradoException.class
+    })
+    public ResponseEntity<GenericResponse> handleDuplicado(RuntimeException ex) {
+        return construirClientes(HttpStatus.CONFLICT, ex.getMessage());
+    }
+
+    @ExceptionHandler(com.proyecto.servicios.exception.clientes.ValidacionNegocioException.class)
+    public ResponseEntity<GenericResponse> handleValidacionNegocio(
+            com.proyecto.servicios.exception.clientes.ValidacionNegocioException ex) {
+        return construirClientes(HttpStatus.BAD_REQUEST, ex.getMessage());
+    }
+
+    @ExceptionHandler(org.springframework.web.bind.MethodArgumentNotValidException.class)
+    public ResponseEntity<GenericResponse> handleValidacionCampos(
+            org.springframework.web.bind.MethodArgumentNotValidException ex) {
+        String mensaje = ex.getBindingResult().getFieldErrors().stream()
+                .map(err -> err.getField() + ": " + err.getDefaultMessage())
+                .collect(java.util.stream.Collectors.joining("; "));
+        return construirClientes(HttpStatus.BAD_REQUEST, mensaje);
+    }
+
+    private ResponseEntity<GenericResponse> construirClientes(HttpStatus status, String mensaje) {
+        GenericResponse body = new GenericResponse();
+        body.setCodigo(status.value());
+        body.setMensaje(mensaje);
+        return ResponseEntity.status(status).body(body);
     }
 
     private GestoPagoCodigoResultado mapearMotivo(GestoPagoAuthenticationException.Motivo motivo) {
