@@ -86,6 +86,18 @@ public class GlobalExceptionHandler {
         return construirClientes(HttpStatus.BAD_REQUEST, mensaje);
     }
 
+    @ExceptionHandler(com.proyecto.servicios.exception.clientes.CredencialesInvalidasException.class)
+    public ResponseEntity<GenericResponse> handleCredencialesInvalidas(
+            com.proyecto.servicios.exception.clientes.CredencialesInvalidasException ex) {
+        return construirClientes(HttpStatus.UNAUTHORIZED, ex.getMessage());
+    }
+
+    @ExceptionHandler(com.proyecto.servicios.exception.clientes.LoginNoEncontradoException.class)
+    public ResponseEntity<GenericResponse> handleLoginNoEncontrado(
+            com.proyecto.servicios.exception.clientes.LoginNoEncontradoException ex) {
+        return construirClientes(HttpStatus.NOT_FOUND, ex.getMessage());
+    }
+
     private ResponseEntity<GenericResponse> construirClientes(HttpStatus status, String mensaje) {
         GenericResponse body = new GenericResponse();
         body.setCodigo(status.value());
