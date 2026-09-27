@@ -7,6 +7,7 @@ import com.proyecto.servicios.exception.gestopago.GestoPagoBadResponseException;
 import com.proyecto.servicios.exception.gestopago.GestoPagoCommunicationException;
 import com.proyecto.servicios.exception.gestopago.GestoPagoIntegrationException;
 import com.proyecto.servicios.mapper.GestoPagoProductMapper;
+import com.proyecto.servicios.model.gestopago.GestoPagoCatalogoCacheDto;
 import com.proyecto.servicios.model.gestopago.GestoPagoProductListXmlResponse;
 import com.proyecto.servicios.model.gestopago.GestoPagoProductoResponse;
 import com.proyecto.servicios.model.gestopago.GestoPagoProductoXml;
@@ -19,6 +20,7 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.stream.Collectors;
 
@@ -107,12 +109,14 @@ public class GestoPagoProductServiceImpl implements GestoPagoProductService {
                 .collect(Collectors.toList());
     }
 
+    /** Guarda el catalogo completo como UN SOLO DTO bajo la llave "gestopago:productos". */
     private boolean guardarEnRedis(List<GestoPagoProductoXml> productosXml) {
         try {
             List<GestoPagoProductoResponse> productos = productosXml.stream()
                     .map(this::aResponse)
                     .collect(Collectors.toList());
-            redisTemplate.opsForValue().set(REDIS_KEY_PRODUCTOS, productos);
+            GestoPagoCatalogoCacheDto cache = new GestoPagoCatalogoCacheDto(productos, LocalDateTime.now());
+            redisTemplate.opsForValue().set(REDIS_KEY_PRODUCTOS, cache);
             log.info("Catalogo guardado en Redis ({} productos)", productos.size());
             return true;
         } catch (Exception e) {
@@ -121,11 +125,11 @@ public class GestoPagoProductServiceImpl implements GestoPagoProductService {
         }
     }
 
-    @SuppressWarnings("unchecked")
+    /** Lee el DTO completo desde la llave. Devuelve null (no lanza) si Redis no esta disponible. */
     private List<GestoPagoProductoResponse> leerDesdeRedis() {
         try {
             Object cacheado = redisTemplate.opsForValue().get(REDIS_KEY_PRODUCTOS);
-            return (cacheado instanceof List<?>) ? (List<GestoPagoProductoResponse>) cacheado : null;
+            return (cacheado instanceof GestoPagoCatalogoCacheDto cache) ? cache.getProductos() : null;
         } catch (Exception e) {
             log.warn("Redis no disponible al leer el catalogo: {}", e.getMessage());
             return null;

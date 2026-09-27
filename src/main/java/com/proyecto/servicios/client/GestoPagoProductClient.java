@@ -18,3 +18,7 @@ public interface GestoPagoProductClient {
     @GetMapping(value = "/sistema/service/getProductList.do", produces = MediaType.APPLICATION_XML_VALUE)
     GestoPagoProductListXmlResponse obtenerListaProductos(@RequestHeader("Authorization") String authorizationHeader);
 }
+
+/*
+*
+* */
