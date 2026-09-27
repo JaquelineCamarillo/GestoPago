@@ -5,7 +5,7 @@ import com.proyecto.servicios.model.EliminaPersonaRequest;
 import com.proyecto.servicios.model.GenericResponse;
 import com.proyecto.servicios.model.PersonaResponse;
 import com.proyecto.servicios.model.PersonasRequest;
-import com.proyecto.servicios.repositorys.sf.PersonasRepository;
+import com.proyecto.servicios.repositorys.sf.ClienteRepository;
 import com.proyecto.servicios.service.PersonaService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.BeanUtils;
@@ -18,7 +18,7 @@ import java.util.Optional;
 @Slf4j
 public class PersonasServiceImpl implements PersonaService {
     @Autowired
-    private PersonasRepository personasRepository;
+    private ClienteRepository personasRepository;
     @Override
     public PersonaResponse creaPersona(PersonasRequest personasRequest) {
         PersonaResponse person=new PersonaResponse();
