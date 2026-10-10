@@ -17,6 +17,14 @@ public interface ClienteService {
     List<ClienteResponse> obtenerTodos();
     List<ClienteResponse> obtenerActivos();
     List<ClienteResponse> obtenerPorRangoDeFechas(LocalDateTime desde, LocalDateTime hasta);
+
+    /**
+     * Busca clientes combinando (con "y") los criterios que no sean nulos.
+     * Debe venir al menos uno. Valida el formato de cada criterio antes de buscar.
+     */
+    List<ClienteResponse> buscar(String nombre, String curp, String rfc, String correo,
+                                 String numeroCuenta, Boolean activo);
+
     ClienteResponse actualizaCliente(Integer id, ActualizaClienteRequest request);
     GenericResponse bajaLogica(Integer id);
 }

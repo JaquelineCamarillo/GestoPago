@@ -5,6 +5,9 @@ import com.proyecto.servicios.entity.sf.Login;
 import com.proyecto.servicios.exception.clientes.ClienteNoEncontradoException;
 import com.proyecto.servicios.exception.clientes.CredencialesInvalidasException;
 import com.proyecto.servicios.exception.clientes.LoginNoEncontradoException;
+import com.proyecto.servicios.exception.clientes.PasswordIncorrectaException;
+import com.proyecto.servicios.exception.clientes.UsuarioNoEncontradoException;
+import com.proyecto.servicios.exception.clientes.ValidacionNegocioException;
 import com.proyecto.servicios.model.*;
 import com.proyecto.servicios.repositorys.sf.ClienteRepository;
 import com.proyecto.servicios.repositorys.sf.LoginRepository;
@@ -15,6 +18,8 @@ import org.springframework.security.crypto.encrypt.TextEncryptor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.UUID;
@@ -63,11 +68,14 @@ public class LoginServiceImpl implements LoginService {
     @Override
     @Transactional
     public LoginResponse iniciarSesion(LoginRequest request) {
-        Login login = buscarLogin(request.getClienteId());
+        Login login = buscarLoginPorCorreo(request.getCorreoElectronico());
 
         String passwordGuardado = textEncryptor.decrypt(login.getPasswordCifrado());
-        if (!passwordGuardado.equals(request.getPassword())) {
-            throw new CredencialesInvalidasException("La contrasena es incorrecta");
+        boolean coincide = MessageDigest.isEqual(
+                passwordGuardado.getBytes(StandardCharsets.UTF_8),
+                request.getPassword().getBytes(StandardCharsets.UTF_8));
+        if (!coincide) {
+            throw new PasswordIncorrectaException();
         }
 
         return activarSesion(login);
@@ -76,7 +84,7 @@ public class LoginServiceImpl implements LoginService {
     @Override
     @Transactional
     public LoginResponse iniciarSesionFacial(LoginFacialRequest request) {
-        Login login = buscarLogin(request.getClienteId());
+        Login login = buscarLoginPorCorreo(request.getCorreoElectronico());
 
         if (login.getEmbeddingFacialCifrado() == null) {
             throw new CredencialesInvalidasException("El cliente no tiene datos faciales registrados");
@@ -139,6 +147,18 @@ public class LoginServiceImpl implements LoginService {
         return new LoginResponse(login.getCliente().getId(), token, true);
     }
 
+    /** Busca al cliente por correo y devuelve sus credenciales; cada fallo tiene su propio mensaje. */
+    private Login buscarLoginPorCorreo(String correo) {
+        String correoNormalizado = correo == null ? "" : correo.trim();
+        Cliente cliente = clienteRepository.findByCorreoElectronicoIgnoreCase(correoNormalizado)
+                .orElseThrow(() -> new UsuarioNoEncontradoException(correoNormalizado));
+
+        if (Boolean.FALSE.equals(cliente.getActivo())) {
+            throw new CredencialesInvalidasException("El cliente esta dado de baja y no puede iniciar sesion");
+        }
+        return buscarLogin(cliente.getId());
+    }
+
     private Login buscarLogin(Integer clienteId) {
         return loginRepository.findByClienteId(clienteId)
                 .orElseThrow(() -> new LoginNoEncontradoException(clienteId));
@@ -148,12 +168,18 @@ public class LoginServiceImpl implements LoginService {
         String[] a = vectorA.split(",");
         String[] b = vectorB.split(",");
         if (a.length != b.length) {
-            throw new CredencialesInvalidasException("El formato del embedding facial no coincide");
+            throw new ValidacionNegocioException("El embedding facial debe tener " + a.length
+                    + " valores y se enviaron " + b.length);
         }
         double suma = 0;
-        for (int i = 0; i < a.length; i++) {
-            double diff = Double.parseDouble(a[i].trim()) - Double.parseDouble(b[i].trim());
-            suma += diff * diff;
+        try {
+            for (int i = 0; i < a.length; i++) {
+                double diff = Double.parseDouble(a[i].trim()) - Double.parseDouble(b[i].trim());
+                suma += diff * diff;
+            }
+        } catch (NumberFormatException e) {
+            throw new ValidacionNegocioException(
+                    "El embedding facial solo debe contener numeros decimales separados por coma (ejemplo: 0.12,0.55,-0.31)");
         }
         return Math.sqrt(suma);
     }
