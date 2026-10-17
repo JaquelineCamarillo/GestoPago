@@ -36,8 +36,9 @@ Por eso el diseño NO llama a GestoPago en cada request del frontend. En su luga
 - **Orden:** los productos se devuelven por **precio ascendente**. El precio llega como
   texto (`"100.0"`), así que se convierte a número para ordenar; los precios vacíos o no
   numéricos van al final y, a igual precio, se ordena por nombre.
-- **Filtro:** `GET /gestopago/productos?tipoFront=2` devuelve solo los productos de ese
-  tipo; sin el parámetro devuelve todo el catálogo.
+- **Filtro:** `POST /gestopago/productos/consultar` con el cuerpo `{ "tipoFront": 2 }` devuelve
+  solo los productos de ese tipo; con el cuerpo vacío (o `GET /gestopago/productos`) devuelve
+  todo el catálogo. El tipo viaja en el cuerpo porque la API no usa parámetros de consulta.
 - Muchos productos del catálogo real tienen precio `0.0` (montos variables), por eso
   aparecen primero.
 
@@ -61,8 +62,8 @@ se configura por variables (`REDIS_HOST`, `REDIS_PORT`, `REDIS_PASSWORD`, `REDIS
 
 ## Arquitectura implementada
 | Capa | Clase |
-|---|---|
-| Controller | `GestoPagoProductController` — `GET /gestopago/productos`, `POST /gestopago/productos/sincronizar` |
+|---|--|
+| Controller | `GestoPagoProductController` — `GET /gestopago/productos`, `POST /gestopago/productos/consultar`, `POST /gestopago/productos/sincronizar` |
 | Service | `GestoPagoProductService` / `GestoPagoProductServiceImpl` |
 | Client/Integration | `GestoPagoProductClient` (Feign, XML) |
 | DTOs | `GestoPagoProductoXml`, `GestoPagoMensajeXml`, `GestoPagoProductListXmlResponse`, `GestoPagoProductoResponse`, `GestoPagoCatalogoCacheDto` |
@@ -124,4 +125,6 @@ datos cuando Redis no está disponible (sin llamar a GestoPago) y filtro por `ti
 4. `POST http://localhost:8081/gestopago/productos/sincronizar` para forzar la
    sincronización.
 5. `GET http://localhost:8081/gestopago/productos` para ver el catálogo (ordenado por
-   precio ascendente) y `GET .../gestopago/productos?tipoFront=2` para filtrarlo.
+   precio ascendente) y `POST .../gestopago/productos/consultar` con `{ "tipoFront": 2 }`
+   para filtrarlo. Las respuestas usan la estructura `GenericResponse` (`codigo`, `mensaje`,
+   `datos`).

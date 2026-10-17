@@ -104,12 +104,28 @@ euclidiana entre el vector guardado y el recibido (umbral configurado en
 Al iniciar sesión (`activarSesion`), `Login.activo=true` y se registra `ultimaActividad`.
 Un job programado (`@Scheduled(fixedRate = 60000)`) revisa cada minuto todas las sesiones
 activas y apaga (`activo=false`) las que llevan más de 5 minutos sin actividad
-(`PUT /login/actividad/{clienteId}` se debe llamar en cada request autenticado del
-frontend para "refrescar" la sesión).
+(`PUT /login/actividad`, con el id del cliente en el cuerpo, se debe llamar en cada request
+autenticado del frontend para "refrescar" la sesión).
 
 **Todo en Postgres, nada en Redis:** Cliente, Domicilio, Cuenta y Login son JPA
 repositories normales contra Postgres — completamente independientes del módulo de cache
 de Redis usado por GestoPago.
+
+## Convenciones de la API (requisitos del profesor)
+| Requisito | Cómo se cumple |
+|---|---|
+| Sin `@PathVariable` ni `@RequestParam` | Ningún endpoint los usa. Todo dato (id, criterios de búsqueda, número de cuenta, filtros) viaja en el cuerpo JSON con `@RequestBody` |
+| Un solo endpoint de búsqueda con filtros combinables | `POST /clientes/buscar` recibe un `BuscarClienteRequest`; los criterios enviados se combinan con "y" |
+| `@Valid` sobre los DTO | Todos los controladores reciben DTO anotados y los validan con `@Valid`; no hay validaciones repetidas en los controladores |
+| Manejo centralizado de errores | `GlobalExceptionHandler` (`@RestControllerAdvice`) con un `@ExceptionHandler` por tipo de excepción; los controladores no tienen `try-catch` |
+| Excepciones propias de negocio | `ClienteNoEncontradoException`, `CorreoDuplicadoException`, `CurpDuplicadaException`, `ValidacionNegocioException`… |
+| Separación Controller / Service / Repository / DTO / Entity | Arquitectura por capas; los controladores no devuelven ni reciben entidades JPA |
+| Campos controlados por el servidor | `id`, `activo`, `fechaRegistro`, saldo y estatus de cuenta no existen en los DTO de entrada, por lo que el cliente no puede fijarlos; en la actualización, CURP, RFC, sexo, fecha de nacimiento y número de cuenta se rechazan si llegan |
+| Actualizar con `Optional` | `actualizaCliente` localiza al cliente con `Optional.ofNullable(id).flatMap(findById).orElseThrow(...)` y asigna cada campo solo si viene (`Optional.ofNullable(valor).ifPresent(...)`); lo omitido no se toca |
+| Consultas dinámicas con Spring Data JPA | `ClienteSpecs` define un filtro por criterio (`Specification`) y el servicio combina solo los que vienen en la petición |
+| Estructura uniforme de respuestas | Éxito y error usan `GenericResponse` (ver "Formato de respuestas") |
+| Códigos de estado adecuados | 201 al crear; 200 en consultas, actualización y baja; 400, 401, 404, 409… según el error |
+| Sin trazas ni SQL al cliente | El handler genérico registra el detalle en el log y responde un mensaje sin información interna |
 
 ## Validaciones de entrada
 
@@ -117,18 +133,20 @@ La validación ocurre **en tres capas**, de modo que un dato inválido se detien
 posible y nunca llega a la base de datos:
 
 1. **Deserialización (JSON):** el tipo de dato debe coincidir (texto, número, fecha, booleano).
-2. **Controller (Bean Validation):** anotaciones sobre el cuerpo (`@Valid`) y sobre los
-   parámetros de ruta y de consulta (`@Validated` en `ClienteController`). Un RFC o una
-   CURP inválidos se rechazan **antes de entrar al service**.
+2. **Controller (Bean Validation):** el cuerpo se valida con `@Valid` contra las
+   anotaciones del DTO (`@NotBlank`, `@Pattern`, `@Size`, `@Curp`, `@Rfc`, `@CodigoPais`…).
+   Un RFC o una CURP inválidos se rechazan **antes de entrar al service**.
 3. **Service:** reglas de negocio (mayoría de edad, duplicados, existencia del cliente).
 
-Todos los errores se responden con el mismo formato (ver "Formato de errores").
+Todos los errores se responden con el mismo formato (ver "Formato de respuestas").
 
 ### Formato de fecha
-Todas las fechas se envían y se reciben como **`yyyy/MM/dd`** (ejemplo: `1995/05/18`).
+Las fechas se envían y se devuelven como **`yyyy/MM/dd`** (ejemplo: `1995/05/18`); la
+fecha y hora de registro se devuelve como `yyyy/MM/dd HH:mm:ss`.
 La lectura es estricta: `1995-05-18`, `1995/5/18`, `18/05/1995` o `1995/02/30` se rechazan
 con el mensaje *"debe ser una fecha con formato yyyy/MM/dd (ejemplo: 1983/05/18)"*.
-Aplica a `fechaNacimiento` y a los parámetros `desde` y `hasta` de `/clientes/rango-fechas`.
+Aplica a `fechaNacimiento` y a los criterios `fechaRegistroDesde` y `fechaRegistroHasta` de
+`POST /clientes/buscar`.
 
 ### Catálogos
 | Catálogo | Endpoint | Fuente | Valores |
@@ -203,9 +221,10 @@ campos opcionales enviados vacíos se guardan como `null`.
 | `codigoPostal` | Sí | Exactamente 5 dígitos |
 | `pais` | Sí | `@CodigoPais` |
 
-### Actualización (`PUT /clientes/{id}`)
-Todos los campos son opcionales, pero los que llegan cumplen las mismas reglas y los
-obligatorios no pueden quedar vacíos. Debe enviarse al menos un campo. **CURP, RFC, sexo,
+### Actualización (`PUT /clientes`)
+El cuerpo lleva el `id` del cliente (obligatorio) y solo los campos a modificar; los demás
+son opcionales, los que llegan cumplen las mismas reglas y los obligatorios no pueden quedar
+vacíos. Debe enviarse al menos un campo además del `id`. **CURP, RFC, sexo,
 fecha de nacimiento y número de cuenta no se pueden modificar**: si llegan en la petición
 se rechazan con un mensaje claro (por ejemplo, *"La CURP no se puede modificar"*). El correo
 nuevo no puede pertenecer a otro cliente.
@@ -219,37 +238,52 @@ nuevo no puede pertenecer a otro cliente.
   cliente ya inactivo se rechaza con un mensaje claro.
 
 ## Endpoints implementados
+Todos los datos viajan en el cuerpo JSON; ningún endpoint usa parámetros de ruta ni de consulta.
 
-| Método | Ruta | Descripción |
-|---|---|---|
-| POST | `/clientes` | Registra cliente + domicilio + cuenta automática |
-| GET | `/clientes` | Lista todos los clientes |
-| GET | `/clientes/buscar?nombre=&curp=&rfc=&correo=&numeroCuenta=&activo=` | Busca por uno o varios criterios combinados (al menos uno) |
-| GET | `/clientes/{id}` | Cliente por id (entero positivo) |
-| GET | `/clientes/curp/{curp}` | Cliente por CURP (validada) |
-| GET | `/clientes/rfc/{rfc}` | Cliente por RFC (validado) |
-| GET | `/clientes/cuenta/{numeroCuenta}` | Cliente por número de cuenta |
-| GET | `/clientes/activos` | Solo clientes activos |
-| GET | `/clientes/rango-fechas?desde=&hasta=` | Clientes registrados en un rango (fechas `yyyy/MM/dd`) |
-| PUT | `/clientes/{id}` | Actualiza datos (sin CURP/RFC/sexo/fecha de nacimiento) |
-| DELETE | `/clientes/{id}` | Baja lógica |
-| GET | `/catalogos/generos` | Catálogo de géneros |
-| GET | `/catalogos/nacionalidades` | Catálogo de nacionalidades (API de países) |
-| GET | `/cuentas/{numeroCuenta}` | Cuenta por número |
-| GET | `/cuentas/activas` | Cuentas activas |
-| GET | `/cuentas/{numeroCuenta}/saldo` | Saldo de una cuenta |
-| POST | `/login/registrar` | Registra password/embedding facial (cifrados) |
-| POST | `/login/iniciar-sesion` | Login con correo y contraseña |
-| POST | `/login/iniciar-sesion-facial` | Login con correo y reconocimiento facial |
-| POST | `/login/cerrar-sesion/{clienteId}` | Cierra sesión manualmente |
-| PUT | `/login/actividad/{clienteId}` | Refresca la sesión (evita el apagado a 5 min) |
+| Método | Ruta | Cuerpo | Descripción |
+|---|---|---|---|
+| POST | `/clientes` | `ClienteRequest` | Registra cliente + domicilio + cuenta automática (201) |
+| GET | `/clientes` | — | Lista todos los clientes |
+| POST | `/clientes/buscar` | `BuscarClienteRequest` | **Única búsqueda**: combina los criterios enviados (al menos uno) |
+| PUT | `/clientes` | `ActualizaClienteRequest` (con `id`) | Actualiza solo los campos enviados (sin CURP/RFC/sexo/fecha de nacimiento) |
+| PUT | `/clientes/baja` | `{ "id": 1 }` | Baja lógica del cliente y de su cuenta |
+| GET | `/catalogos/generos` | — | Catálogo de géneros |
+| GET | `/catalogos/nacionalidades` | — | Catálogo de nacionalidades (API de países) |
+| POST | `/cuentas/consultar` | `{ "numeroCuenta": "..." }` | Cuenta por número |
+| GET | `/cuentas/activas` | — | Cuentas activas |
+| POST | `/cuentas/saldo` | `{ "numeroCuenta": "..." }` | Saldo de una cuenta |
+| POST | `/login/registrar` | `RegistrarCredencialesRequest` | Registra password/embedding facial (cifrados) |
+| POST | `/login/iniciar-sesion` | `LoginRequest` | Login con correo y contraseña |
+| POST | `/login/iniciar-sesion-facial` | `LoginFacialRequest` | Login con correo y reconocimiento facial |
+| POST | `/login/cerrar-sesion` | `{ "id": 1 }` | Cierra sesión manualmente |
+| PUT | `/login/actividad` | `{ "id": 1 }` | Refresca la sesión (evita el apagado a 5 min) |
+| GET | `/gestopago/productos` | — | Catálogo completo de GestoPago, ordenado por precio |
+| POST | `/gestopago/productos/consultar` | `{ "tipoFront": 2 }` (opcional) | Catálogo filtrado por tipo |
+| POST | `/gestopago/productos/sincronizar` | — | Sincroniza el catálogo (pruebas) |
 
-### Búsqueda de clientes
-Se puede buscar por **nombre**, **CURP**, **RFC**, **correo**, **número de cuenta** y
-**estado activo**; los criterios enviados se combinan con "y". El nombre se busca por
-partes, sin distinguir mayúsculas ni acentos (`juana camarillo` encuentra a *Juana
-Jaqueline Camarillo Olaez*). Cada criterio se valida con las mismas reglas del registro.
-Sin criterios responde 400; sin resultados responde 404 indicando los criterios usados.
+### Búsqueda de clientes (`POST /clientes/buscar`)
+Criterios opcionales (debe venir al menos uno); los enviados se combinan con "y":
+
+| Criterio | Regla |
+|---|---|
+| `id` | Entero positivo |
+| `nombre` | 2–100 caracteres, solo letras; se busca por palabras en el nombre completo, sin distinguir mayúsculas ni acentos |
+| `curp` | `@Curp` (estructura y dígito verificador) |
+| `rfc` | `@Rfc` (persona física) |
+| `correoElectronico` | Formato de correo, máximo 100 |
+| `numeroCuenta` | 6–30 caracteres alfanuméricos |
+| `sexo` | `H`, `M`, `X`, `O` o `N` |
+| `nacionalidad` | Código de país del catálogo (`MX`) |
+| `activo` | `true` o `false` |
+| `fechaRegistroDesde`, `fechaRegistroHasta` | `yyyy/MM/dd`; "desde" no puede ser posterior a "hasta" |
+
+Ejemplo:
+```json
+{ "nombre": "juana camarillo", "activo": true, "fechaRegistroDesde": "2026/01/01" }
+```
+Sin criterios responde 400; sin resultados responde 404 indicando los criterios usados. La
+consulta se arma dinámicamente con `Specification` (`ClienteSpecs`): cada criterio presente
+agrega un filtro SQL.
 
 ### Login por correo
 `POST /login/iniciar-sesion` recibe `correoElectronico` y `password`, con mensajes
@@ -264,8 +298,15 @@ específicos:
 > saber qué correos existen (enumeración de usuarios). Se implementa así por requerimiento
 > explícito del profesor.
 
-## Formato de errores
-Todos los errores usan el mismo cuerpo:
+## Formato de respuestas
+Éxito y error comparten la estructura `GenericResponse`: `codigo` (0 = éxito, otro valor =
+error), `mensaje` y, solo en éxito con información, `datos`.
+
+Éxito:
+```json
+{ "codigo": 0, "mensaje": "Consulta realizada correctamente", "datos": [ { "id": 1, "nombre": "Juana" } ] }
+```
+Error:
 ```json
 { "codigo": 400, "mensaje": "rfc: El RFC tiene 12 caracteres, que corresponde a una persona moral..." }
 ```
@@ -281,7 +322,7 @@ Todos los errores usan el mismo cuerpo:
 | Error inesperado (sin detalles técnicos) | 500 |
 
 Ejemplos de mensajes de tipo de dato: *"El campo 'ingresoMensual' debe ser un número"*,
-*"El parámetro 'id' debe ser un número entero"*.
+*"El campo 'id' debe ser un número entero (sin letras ni decimales)"*.
 
 ## Manejo de excepciones personalizadas
 `ClienteNoEncontradoException`, `CurpDuplicadaException`, `RfcDuplicadoException`,
@@ -295,12 +336,12 @@ correcto y un mensaje claro, nunca un error genérico.
 ## Respuesta a la observación sobre la validación del RFC
 | Observación | Cómo se resuelve |
 |---|---|
-| Acepta cadenas vacías o con espacios | `@NotBlank` y `@Rfc` rechazan vacío, solo espacios y tabuladores; también en parámetros de ruta y consulta. Los espacios de los extremos se recortan; los internos se rechazan |
+| Acepta cadenas vacías o con espacios | `@NotBlank` y `@Rfc` rechazan vacío, solo espacios y tabuladores, tanto en el registro como en la búsqueda. Los espacios de los extremos se recortan; los internos se rechazan |
 | No verifica la longitud esperada | Exige 13 caracteres (física) o 12 (moral), con mensaje que indica la longitud recibida |
 | No comprueba el formato de persona física o moral | `RfcValidador` distingue ambas estructuras (letras, fecha, homoclave) y explica si el RFC corresponde al otro tipo |
 | Acepta caracteres especiales | Solo letras y números (y `&` en persona moral); cualquier otro símbolo se rechaza |
 | No normaliza el RFC | Se recorta y se convierte a mayúsculas antes de validar y de consultar |
-| Datos inválidos llegan al service o a la base de datos | La validación ocurre en el controller (`@Validated`) y en el DTO; además se verifica el dígito verificador |
+| Datos inválidos llegan al service o a la base de datos | La validación ocurre en el DTO con `@Valid`, antes de entrar al service; además se verifica el dígito verificador |
 
 ## Evidencia de pruebas
 - `ClienteServiceImplTest`: creación exitosa con cuenta automática, rechazo por menor de
