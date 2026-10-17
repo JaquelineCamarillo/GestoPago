@@ -20,7 +20,9 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.math.BigDecimal;
 import java.time.LocalDateTime;
+import java.util.Comparator;
 import java.util.List;
 import java.util.stream.Collectors;
 
@@ -32,6 +34,13 @@ public class GestoPagoProductServiceImpl implements GestoPagoProductService {
     private static final String CODIGO_EXITO = "01";
     private static final String REDIS_KEY_PRODUCTOS = "gestopago:productos";
     private static final int TIPO_FRONT_POR_DEFECTO = 0;
+
+    /** Orden del listado: precio ascendente (los precios no numericos van al final) y, a igual precio, por nombre. */
+    private static final Comparator<GestoPagoProductoResponse> POR_PRECIO_ASCENDENTE =
+            Comparator.comparing(GestoPagoProductServiceImpl::precioNumerico,
+                            Comparator.nullsLast(Comparator.<BigDecimal>naturalOrder()))
+                    .thenComparing(p -> p.getNombreProducto() == null ? "" : p.getNombreProducto(),
+                            String.CASE_INSENSITIVE_ORDER);
 
     private final GestoPagoProductClient gestoPagoProductClient;
     private final GestoPagoTokenService gestoPagoTokenService;
@@ -101,12 +110,24 @@ public class GestoPagoProductServiceImpl implements GestoPagoProductService {
                     .collect(Collectors.toList());
         }
 
-        if (tipoFront == null) {
-            return catalogo;
-        }
+        // Se ordena una copia (stream) para no alterar la lista que viene del cache
         return catalogo.stream()
-                .filter(p -> tipoFront.equals(p.getTipoFront()))
+                .filter(p -> tipoFront == null || tipoFront.equals(p.getTipoFront()))
+                .sorted(POR_PRECIO_ASCENDENTE)
                 .collect(Collectors.toList());
+    }
+
+    /** Convierte el precio (texto) a numero; devuelve null si esta vacio o no es un numero valido. */
+    private static BigDecimal precioNumerico(GestoPagoProductoResponse producto) {
+        String precio = producto.getPrecio();
+        if (precio == null || precio.isBlank()) {
+            return null;
+        }
+        try {
+            return new BigDecimal(precio.trim());
+        } catch (NumberFormatException e) {
+            return null;
+        }
     }
 
     /** Guarda el catalogo completo como UN SOLO DTO bajo la llave "gestopago:productos". */
