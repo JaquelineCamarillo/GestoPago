@@ -51,6 +51,15 @@ Swagger UI: <http://localhost:8081/swagger-ui/index.html>
 ```
 Cubren los validadores de CURP y RFC, la lógica de clientes y el catálogo de productos de GestoPago.
 
+## Convenciones de la API
+- Todos los datos viajan en el cuerpo JSON (`@RequestBody` + `@Valid`); no se usan `@PathVariable` ni `@RequestParam`.
+- Una sola búsqueda de clientes con criterios combinables: `POST /clientes/buscar`.
+- Respuesta uniforme en éxito y error: `{ "codigo", "mensaje", "datos" }` (`codigo` 0 = éxito).
+- Fechas en formato `yyyy/MM/dd`.
+- Errores centralizados en `GlobalExceptionHandler` (`@RestControllerAdvice`).
+
+Detalle de endpoints y reglas en [docs/integracion-clientes.md](docs/integracion-clientes.md).
+
 ## Despliegue
 El `Dockerfile` construye la aplicación en dos etapas (JDK para compilar, JRE para ejecutar).
 Se despliega en **Render** (servicio web con Docker) desde la rama `develop`; la base de

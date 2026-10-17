@@ -1,5 +1,6 @@
 package com.proyecto.servicios.model;
 
+import com.fasterxml.jackson.annotation.JsonFormat;
 import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
@@ -16,7 +17,10 @@ public class ClienteResponse {
     private String segundoNombre;
     private String apellidoPaterno;
     private String apellidoMaterno;
+
+    @JsonFormat(shape = JsonFormat.Shape.STRING, pattern = "yyyy/MM/dd")
     private LocalDate fechaNacimiento;
+
     private String curp;
     private String rfc;
     private String sexo;
@@ -29,7 +33,10 @@ public class ClienteResponse {
     private String empresa;
     private Double ingresoMensual;
     private Boolean activo;
+
+    @JsonFormat(shape = JsonFormat.Shape.STRING, pattern = "yyyy/MM/dd HH:mm:ss")
     private LocalDateTime fechaRegistro;
+
     private String numeroCuenta;
     private Double saldo;
     private String estatusCuenta;
