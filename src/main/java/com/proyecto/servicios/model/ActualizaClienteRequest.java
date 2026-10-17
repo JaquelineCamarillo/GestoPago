@@ -11,6 +11,8 @@ import jakarta.validation.constraints.DecimalMin;
 import jakarta.validation.constraints.Null;
 import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
+import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Positive;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
@@ -19,7 +21,7 @@ import java.math.BigDecimal;
 import java.time.LocalDate;
 
 /**
- * Todos los campos son opcionales: solo se modifican los que vienen en la peticion.
+ * El id identifica al cliente; el resto de los campos son opcionales: solo se modifican los que vienen en la peticion.
  * Los campos que vienen deben cumplir las mismas reglas que al crear el cliente.
  */
 @Getter
@@ -38,6 +40,14 @@ public class ActualizaClienteRequest {
     private static final String TEXTO_DIRECCION =
             "^(?=.*[" + LETRAS + "0-9])[" + LETRAS + "0-9 .,#/\u00B0'&-]+$";
     private static final String TEXTO_DIRECCION_O_VACIO = "^[" + LETRAS + "0-9 .,#/\u00B0'&-]*$";
+
+
+    // ----- Identificador del cliente (viaja en el cuerpo, no en la URL) -----
+
+    @NotNull(message = "El id del cliente es obligatorio")
+    @Positive(message = "El id del cliente debe ser un numero entero positivo")
+    @Schema(example = "1", description = "Cliente a modificar")
+    private Integer id;
 
     // ----- Datos personales -----
 

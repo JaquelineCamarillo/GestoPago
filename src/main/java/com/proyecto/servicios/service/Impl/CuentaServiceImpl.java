@@ -8,6 +8,7 @@ import com.proyecto.servicios.service.CuentaService;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
+import java.util.Locale;
 import java.util.stream.Collectors;
 
 @Service
@@ -37,8 +38,10 @@ public class CuentaServiceImpl implements CuentaService {
     }
 
     private Cuenta buscar(String numeroCuenta) {
-        return cuentaRepository.findByNumeroCuenta(numeroCuenta)
-                .orElseThrow(() -> new CuentaNoEncontradaException(numeroCuenta));
+        // El numero de cuenta se guarda en mayusculas: se normaliza lo que escribe el cliente
+        String numero = numeroCuenta == null ? "" : numeroCuenta.trim().toUpperCase(Locale.ROOT);
+        return cuentaRepository.findByNumeroCuenta(numero)
+                .orElseThrow(() -> new CuentaNoEncontradaException(numero));
     }
 
     private CuentaResponse aResponse(Cuenta cuenta) {

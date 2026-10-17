@@ -5,30 +5,33 @@ import com.proyecto.servicios.entity.sf.Cuenta;
 import com.proyecto.servicios.entity.sf.Domicilio;
 import com.proyecto.servicios.exception.clientes.*;
 import com.proyecto.servicios.model.ActualizaClienteRequest;
+import com.proyecto.servicios.model.BuscarClienteRequest;
 import com.proyecto.servicios.model.ClienteRequest;
 import com.proyecto.servicios.model.ClienteResponse;
 import com.proyecto.servicios.model.GenericResponse;
 import com.proyecto.servicios.repositorys.sf.ClienteRepository;
+import com.proyecto.servicios.repositorys.sf.ClienteSpecs;
 import com.proyecto.servicios.repositorys.sf.CuentaRepository;
 import com.proyecto.servicios.repositorys.sf.DomicilioRepository;
 import com.proyecto.servicios.service.ClienteService;
 import com.proyecto.servicios.util.CurpValidador;
 import com.proyecto.servicios.util.RfcValidador;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.domain.Sort;
+import org.springframework.data.jpa.domain.Specification;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.text.Normalizer;
 import java.time.LocalDate;
-import java.time.LocalDateTime;
 import java.time.Period;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
 import java.util.UUID;
-import java.util.regex.Pattern;
+import java.util.function.Consumer;
+import java.util.function.UnaryOperator;
 import java.util.stream.Collectors;
 
 @Service
@@ -36,13 +39,6 @@ import java.util.stream.Collectors;
 public class ClienteServiceImpl implements ClienteService {
 
     private static final int EDAD_MINIMA = 18;
-
-    private static final String LETRAS =
-            "A-Za-z\u00C1\u00C9\u00CD\u00D3\u00DA\u00DC\u00D1\u00E1\u00E9\u00ED\u00F3\u00FA\u00FC\u00F1";
-    private static final Pattern PATRON_NOMBRE_BUSQUEDA = Pattern.compile("^[" + LETRAS + "]+( [" + LETRAS + "]+)*$");
-    private static final Pattern PATRON_CORREO =
-            Pattern.compile("^[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(\\.[A-Za-z0-9-]+)*\\.[A-Za-z]{2,}$");
-    private static final Pattern PATRON_CUENTA = Pattern.compile("^[A-Za-z0-9]{6,30}$");
 
     private final ClienteRepository clienteRepository;
     private final DomicilioRepository domicilioRepository;
@@ -122,58 +118,8 @@ public class ClienteServiceImpl implements ClienteService {
     }
 
     @Override
-    public ClienteResponse obtenerPorCurp(String curp) {
-        String normalizada = CurpValidador.normalizar(curp);
-        CurpValidador.validar(normalizada).ifPresent(error -> {
-            throw new ValidacionNegocioException(error);
-        });
-        Cliente cliente = clienteRepository.findByCurp(normalizada)
-                .orElseThrow(() -> new ClienteNoEncontradoException("No existe un cliente con CURP: " + normalizada));
-        return aResponse(cliente, cuentaDe(cliente));
-    }
-
-    @Override
-    public ClienteResponse obtenerPorRfc(String rfc) {
-        String normalizado = RfcValidador.normalizar(rfc);
-        RfcValidador.validar(normalizado).ifPresent(error -> {
-            throw new ValidacionNegocioException(error);
-        });
-        Cliente cliente = clienteRepository.findByRfc(normalizado)
-                .orElseThrow(() -> new ClienteNoEncontradoException("No existe un cliente con RFC: " + normalizado));
-        return aResponse(cliente, cuentaDe(cliente));
-    }
-
-    @Override
-    public ClienteResponse obtenerPorNumeroCuenta(String numeroCuenta) {
-        String numero = validarNumeroCuenta(numeroCuenta);
-        Cuenta cuenta = cuentaRepository.findByNumeroCuenta(numero)
-                .orElseThrow(() -> new CuentaNoEncontradaException(numero));
-        return aResponse(cuenta.getCliente(), cuenta);
-    }
-
-    @Override
     public List<ClienteResponse> obtenerTodos() {
         return clienteRepository.findAll().stream()
-                .map(c -> aResponse(c, cuentaDe(c)))
-                .collect(Collectors.toList());
-    }
-
-    @Override
-    public List<ClienteResponse> obtenerActivos() {
-        return clienteRepository.findByActivoTrue().stream()
-                .map(c -> aResponse(c, cuentaDe(c)))
-                .collect(Collectors.toList());
-    }
-
-    @Override
-    public List<ClienteResponse> obtenerPorRangoDeFechas(LocalDateTime desde, LocalDateTime hasta) {
-        if (desde == null || hasta == null) {
-            throw new ValidacionNegocioException("Las fechas 'desde' y 'hasta' son obligatorias");
-        }
-        if (desde.isAfter(hasta)) {
-            throw new ValidacionNegocioException("La fecha 'desde' no puede ser posterior a la fecha 'hasta'");
-        }
-        return clienteRepository.findByFechaRegistroBetween(desde, hasta).stream()
                 .map(c -> aResponse(c, cuentaDe(c)))
                 .collect(Collectors.toList());
     }
@@ -181,125 +127,106 @@ public class ClienteServiceImpl implements ClienteService {
     // ----------------------------------------------------------------- Busqueda
 
     @Override
-    public List<ClienteResponse> buscar(String nombre, String curp, String rfc, String correo,
-                                        String numeroCuenta, Boolean activo) {
-        String nombreBuscado = vacioANull(nombre);
-        String curpBuscada = vacioANull(curp);
-        String rfcBuscado = vacioANull(rfc);
-        String correoBuscado = vacioANull(correo);
-        String cuentaBuscada = vacioANull(numeroCuenta);
-
-        if (nombreBuscado == null && curpBuscada == null && rfcBuscado == null
-                && correoBuscado == null && cuentaBuscada == null && activo == null) {
+    public List<ClienteResponse> buscar(BuscarClienteRequest criterios) {
+        if (criterios == null || sinCriterios(criterios)) {
             throw new ValidacionNegocioException(
-                    "Debe enviar al menos un criterio de busqueda: nombre, curp, rfc, correo, numeroCuenta o activo");
+                    "Debe enviar al menos un criterio de busqueda: id, nombre, curp, rfc, correoElectronico, "
+                            + "numeroCuenta, sexo, nacionalidad, activo, fechaRegistroDesde o fechaRegistroHasta");
         }
 
-        // 1. Validar el formato de cada criterio antes de consultar
-        if (nombreBuscado != null) {
-            if (nombreBuscado.length() < 2 || nombreBuscado.length() > 100) {
-                throw new ValidacionNegocioException("El nombre a buscar debe tener entre 2 y 100 caracteres");
+        // Los formatos ya se validaron en el DTO (@Valid); aqui solo se normalizan los valores.
+        String nombre = vacioANull(criterios.getNombre());
+        String curp = Optional.ofNullable(vacioANull(criterios.getCurp())).map(CurpValidador::normalizar).orElse(null);
+        String rfc = Optional.ofNullable(vacioANull(criterios.getRfc())).map(RfcValidador::normalizar).orElse(null);
+        String correo = Optional.ofNullable(vacioANull(criterios.getCorreoElectronico())).map(ClienteServiceImpl::minusculas).orElse(null);
+        String cuenta = Optional.ofNullable(vacioANull(criterios.getNumeroCuenta())).map(ClienteServiceImpl::mayusculas).orElse(null);
+        String sexo = Optional.ofNullable(vacioANull(criterios.getSexo())).map(ClienteServiceImpl::mayusculas).orElse(null);
+        String nacionalidad = Optional.ofNullable(vacioANull(criterios.getNacionalidad())).map(ClienteServiceImpl::mayusculas).orElse(null);
+
+        // Consulta dinamica: cada criterio presente agrega un filtro, y todos se combinan con "y".
+        Specification<Cliente> filtro = ClienteSpecs.todos();
+        if (criterios.getId() != null) {
+            filtro = filtro.and(ClienteSpecs.conId(criterios.getId()));
+        }
+        if (curp != null) {
+            filtro = filtro.and(ClienteSpecs.conCurp(curp));
+        }
+        if (rfc != null) {
+            filtro = filtro.and(ClienteSpecs.conRfc(rfc));
+        }
+        if (correo != null) {
+            filtro = filtro.and(ClienteSpecs.conCorreo(correo));
+        }
+        if (cuenta != null) {
+            filtro = filtro.and(ClienteSpecs.conNumeroCuenta(cuenta));
+        }
+        if (sexo != null) {
+            filtro = filtro.and(ClienteSpecs.conSexo(sexo));
+        }
+        if (nacionalidad != null) {
+            filtro = filtro.and(ClienteSpecs.conNacionalidad(nacionalidad));
+        }
+        if (criterios.getActivo() != null) {
+            filtro = filtro.and(ClienteSpecs.conActivo(criterios.getActivo()));
+        }
+        if (criterios.getFechaRegistroDesde() != null) {
+            filtro = filtro.and(ClienteSpecs.registradoDesde(criterios.getFechaRegistroDesde()));
+        }
+        if (criterios.getFechaRegistroHasta() != null) {
+            filtro = filtro.and(ClienteSpecs.registradoHasta(criterios.getFechaRegistroHasta()));
+        }
+        if (nombre != null) {
+            // Todas las palabras escritas deben aparecer en el nombre completo, sin importar acentos ni mayusculas.
+            for (String palabra : palabrasDeBusqueda(nombre)) {
+                filtro = filtro.and(ClienteSpecs.nombreContiene(palabra));
             }
-            if (!PATRON_NOMBRE_BUSQUEDA.matcher(nombreBuscado).matches()) {
-                throw new ValidacionNegocioException(
-                        "El nombre a buscar solo debe contener letras (sin numeros ni simbolos)");
-            }
-        }
-        if (curpBuscada != null) {
-            curpBuscada = CurpValidador.normalizar(curpBuscada);
-            CurpValidador.validar(curpBuscada).ifPresent(error -> {
-                throw new ValidacionNegocioException(error);
-            });
-        }
-        if (rfcBuscado != null) {
-            rfcBuscado = RfcValidador.normalizar(rfcBuscado);
-            RfcValidador.validar(rfcBuscado).ifPresent(error -> {
-                throw new ValidacionNegocioException(error);
-            });
-        }
-        if (correoBuscado != null) {
-            correoBuscado = correoBuscado.toLowerCase(Locale.ROOT);
-            if (!PATRON_CORREO.matcher(correoBuscado).matches()) {
-                throw new ValidacionNegocioException(
-                        "El correo a buscar no tiene un formato valido (ejemplo: nombre@dominio.com)");
-            }
-        }
-        if (cuentaBuscada != null) {
-            cuentaBuscada = validarNumeroCuenta(cuentaBuscada);
         }
 
-        // 2. Candidatos: se parte del criterio mas especifico
-        List<Cliente> candidatos = obtenerCandidatos(nombreBuscado, curpBuscada, rfcBuscado,
-                correoBuscado, cuentaBuscada, activo);
-
-        // 3. Se aplican todos los criterios con "y"
-        final String nombreFinal = nombreBuscado;
-        final String curpFinal = curpBuscada;
-        final String rfcFinal = rfcBuscado;
-        final String correoFinal = correoBuscado;
-        final String cuentaFinal = cuentaBuscada;
-
-        List<ClienteResponse> resultado = candidatos.stream()
-                .filter(c -> curpFinal == null || curpFinal.equalsIgnoreCase(c.getCurp()))
-                .filter(c -> rfcFinal == null || rfcFinal.equalsIgnoreCase(c.getRfc()))
-                .filter(c -> correoFinal == null || correoFinal.equalsIgnoreCase(c.getCorreoElectronico()))
-                .filter(c -> activo == null || activo.equals(c.getActivo()))
-                .filter(c -> nombreFinal == null || nombreCoincide(c, nombreFinal))
-                .map(c -> new Object[] {c, cuentaDe(c)})
-                .filter(par -> cuentaFinal == null
-                        || (par[1] != null && cuentaFinal.equalsIgnoreCase(((Cuenta) par[1]).getNumeroCuenta())))
-                .map(par -> aResponse((Cliente) par[0], (Cuenta) par[1]))
+        List<ClienteResponse> resultado = clienteRepository.findAll(filtro, Sort.by("id")).stream()
+                .map(c -> aResponse(c, cuentaDe(c)))
                 .collect(Collectors.toList());
 
         if (resultado.isEmpty()) {
             throw new ClienteNoEncontradoException("No se encontraron clientes con: "
-                    + describirCriterios(nombreBuscado, curpBuscada, rfcBuscado, correoBuscado, cuentaBuscada, activo));
+                    + describirCriterios(criterios, nombre, curp, rfc, correo, cuenta, sexo, nacionalidad));
         }
         return resultado;
     }
 
-    private List<Cliente> obtenerCandidatos(String nombre, String curp, String rfc, String correo,
-                                            String cuenta, Boolean activo) {
-        if (curp != null) {
-            return clienteRepository.findByCurp(curp).map(List::of).orElseGet(List::of);
-        }
-        if (rfc != null) {
-            return clienteRepository.findByRfc(rfc).map(List::of).orElseGet(List::of);
-        }
-        if (correo != null) {
-            return clienteRepository.findByCorreoElectronicoIgnoreCase(correo).map(List::of).orElseGet(List::of);
-        }
-        if (cuenta != null) {
-            return cuentaRepository.findByNumeroCuenta(cuenta.toUpperCase(Locale.ROOT))
-                    .map(c -> List.of(c.getCliente()))
-                    .orElseGet(List::of);
-        }
-        if (Boolean.TRUE.equals(activo)) {
-            return clienteRepository.findByActivoTrue();
-        }
-        // Nombre (sin acentos ni mayusculas) o activo=false: se filtra en memoria
-        return clienteRepository.findAll();
+    private boolean sinCriterios(BuscarClienteRequest c) {
+        return c.getId() == null && vacioANull(c.getNombre()) == null && vacioANull(c.getCurp()) == null
+                && vacioANull(c.getRfc()) == null && vacioANull(c.getCorreoElectronico()) == null
+                && vacioANull(c.getNumeroCuenta()) == null && vacioANull(c.getSexo()) == null
+                && vacioANull(c.getNacionalidad()) == null && c.getActivo() == null
+                && c.getFechaRegistroDesde() == null && c.getFechaRegistroHasta() == null;
     }
 
-    /** Todas las palabras escritas deben aparecer en el nombre completo, sin importar acentos ni mayusculas. */
-    private boolean nombreCoincide(Cliente cliente, String texto) {
-        String completo = sinAcentos(String.join(" ",
-                valorODefecto(cliente.getNombre()), valorODefecto(cliente.getSegundoNombre()),
-                valorODefecto(cliente.getApellidoPaterno()), valorODefecto(cliente.getApellidoMaterno())));
-        return Arrays.stream(sinAcentos(texto).split(" "))
-                .filter(palabra -> !palabra.isBlank())
-                .allMatch(completo::contains);
+    /** Palabras del nombre buscado, en minusculas, sin acentos y solo con letras (nunca llegan comodines al LIKE). */
+    private List<String> palabrasDeBusqueda(String nombre) {
+        List<String> palabras = new ArrayList<>();
+        for (String palabra : sinAcentos(nombre).split("\\s+")) {
+            String limpia = palabra.replaceAll("[^a-z]", "");
+            if (!limpia.isEmpty()) {
+                palabras.add(limpia);
+            }
+        }
+        return palabras;
     }
 
-    private String describirCriterios(String nombre, String curp, String rfc, String correo,
-                                      String cuenta, Boolean activo) {
+    private String describirCriterios(BuscarClienteRequest c, String nombre, String curp, String rfc,
+                                      String correo, String cuenta, String sexo, String nacionalidad) {
         List<String> partes = new ArrayList<>();
+        if (c.getId() != null) partes.add("id=" + c.getId());
         if (nombre != null) partes.add("nombre='" + nombre + "'");
         if (curp != null) partes.add("curp='" + curp + "'");
         if (rfc != null) partes.add("rfc='" + rfc + "'");
-        if (correo != null) partes.add("correo='" + correo + "'");
+        if (correo != null) partes.add("correoElectronico='" + correo + "'");
         if (cuenta != null) partes.add("numeroCuenta='" + cuenta + "'");
-        if (activo != null) partes.add("activo=" + activo);
+        if (sexo != null) partes.add("sexo='" + sexo + "'");
+        if (nacionalidad != null) partes.add("nacionalidad='" + nacionalidad + "'");
+        if (c.getActivo() != null) partes.add("activo=" + c.getActivo());
+        if (c.getFechaRegistroDesde() != null) partes.add("fechaRegistroDesde=" + c.getFechaRegistroDesde());
+        if (c.getFechaRegistroHasta() != null) partes.add("fechaRegistroHasta=" + c.getFechaRegistroHasta());
         return String.join(", ", partes);
     }
 
@@ -307,46 +234,57 @@ public class ClienteServiceImpl implements ClienteService {
 
     @Override
     @Transactional
-    public ClienteResponse actualizaCliente(Integer id, ActualizaClienteRequest request) {
-        validarId(id);
-        Cliente cliente = clienteRepository.findById(id)
+    public ClienteResponse actualizaCliente(ActualizaClienteRequest request) {
+        Integer id = request.getId();
+        Cliente cliente = Optional.ofNullable(id)
+                .flatMap(clienteRepository::findById)
                 .orElseThrow(() -> new ClienteNoEncontradoException("No existe un cliente con id: " + id));
 
-        if (request.getCorreoElectronico() != null) {
-            String correoNuevo = minusculas(request.getCorreoElectronico());
-            clienteRepository.findByCorreoElectronico(correoNuevo)
-                    .filter(otro -> !otro.getId().equals(cliente.getId()))
-                    .ifPresent(otro -> { throw new CorreoDuplicadoException(correoNuevo); });
-            cliente.setCorreoElectronico(correoNuevo);
-        }
+        // El correo es unico: se valida que no lo use otro cliente antes de asignarlo
+        Optional.ofNullable(request.getCorreoElectronico())
+                .map(ClienteServiceImpl::minusculas)
+                .ifPresent(correoNuevo -> {
+                    clienteRepository.findByCorreoElectronico(correoNuevo)
+                            .filter(otro -> !otro.getId().equals(cliente.getId()))
+                            .ifPresent(otro -> {
+                                throw new CorreoDuplicadoException(correoNuevo);
+                            });
+                    cliente.setCorreoElectronico(correoNuevo);
+                });
 
-        // CURP, RFC, sexo, fecha de nacimiento y numero de cuenta nunca se modifican (regla de negocio)
-        if (request.getNombre() != null) cliente.setNombre(limpiar(request.getNombre()));
-        if (request.getSegundoNombre() != null) cliente.setSegundoNombre(vacioANull(request.getSegundoNombre()));
-        if (request.getApellidoPaterno() != null) cliente.setApellidoPaterno(limpiar(request.getApellidoPaterno()));
-        if (request.getApellidoMaterno() != null) cliente.setApellidoMaterno(limpiar(request.getApellidoMaterno()));
-        if (request.getNacionalidad() != null) cliente.setNacionalidad(mayusculas(request.getNacionalidad()));
-        if (request.getEstadoCivil() != null) cliente.setEstadoCivil(limpiar(request.getEstadoCivil()));
-        if (request.getTelefonoMovil() != null) cliente.setTelefonoMovil(request.getTelefonoMovil());
-        if (request.getTelefonoAlternativo() != null) cliente.setTelefonoAlternativo(vacioANull(request.getTelefonoAlternativo()));
-        if (request.getOcupacion() != null) cliente.setOcupacion(vacioANull(request.getOcupacion()));
-        if (request.getEmpresa() != null) cliente.setEmpresa(vacioANull(request.getEmpresa()));
-        if (request.getIngresoMensual() != null) cliente.setIngresoMensual(request.getIngresoMensual());
+        // Solo se asigna lo que viene en la peticion (Optional vacio = campo omitido = no se toca).
+        // CURP, RFC, sexo, fecha de nacimiento y numero de cuenta nunca se modifican (regla de negocio).
+        aplicar(request.getNombre(), ClienteServiceImpl::limpiar, cliente::setNombre);
+        aplicar(request.getSegundoNombre(), ClienteServiceImpl::vacioANull, cliente::setSegundoNombre);
+        aplicar(request.getApellidoPaterno(), ClienteServiceImpl::limpiar, cliente::setApellidoPaterno);
+        aplicar(request.getApellidoMaterno(), ClienteServiceImpl::limpiar, cliente::setApellidoMaterno);
+        aplicar(request.getNacionalidad(), ClienteServiceImpl::mayusculas, cliente::setNacionalidad);
+        aplicar(request.getEstadoCivil(), ClienteServiceImpl::limpiar, cliente::setEstadoCivil);
+        aplicar(request.getTelefonoMovil(), UnaryOperator.identity(), cliente::setTelefonoMovil);
+        aplicar(request.getTelefonoAlternativo(), ClienteServiceImpl::vacioANull, cliente::setTelefonoAlternativo);
+        aplicar(request.getOcupacion(), ClienteServiceImpl::vacioANull, cliente::setOcupacion);
+        aplicar(request.getEmpresa(), ClienteServiceImpl::vacioANull, cliente::setEmpresa);
+        Optional.ofNullable(request.getIngresoMensual()).ifPresent(cliente::setIngresoMensual);
         clienteRepository.save(cliente);
 
         domicilioRepository.findByClienteId(cliente.getId()).ifPresent(domicilio -> {
-            if (request.getCalle() != null) domicilio.setCalle(limpiar(request.getCalle()));
-            if (request.getNumeroExterior() != null) domicilio.setNumeroExterior(limpiar(request.getNumeroExterior()));
-            if (request.getNumeroInterior() != null) domicilio.setNumeroInterior(vacioANull(request.getNumeroInterior()));
-            if (request.getColonia() != null) domicilio.setColonia(limpiar(request.getColonia()));
-            if (request.getMunicipio() != null) domicilio.setMunicipio(limpiar(request.getMunicipio()));
-            if (request.getEstado() != null) domicilio.setEstado(limpiar(request.getEstado()));
-            if (request.getCodigoPostal() != null) domicilio.setCodigoPostal(request.getCodigoPostal());
-            if (request.getPais() != null) domicilio.setPais(mayusculas(request.getPais()));
+            aplicar(request.getCalle(), ClienteServiceImpl::limpiar, domicilio::setCalle);
+            aplicar(request.getNumeroExterior(), ClienteServiceImpl::limpiar, domicilio::setNumeroExterior);
+            aplicar(request.getNumeroInterior(), ClienteServiceImpl::vacioANull, domicilio::setNumeroInterior);
+            aplicar(request.getColonia(), ClienteServiceImpl::limpiar, domicilio::setColonia);
+            aplicar(request.getMunicipio(), ClienteServiceImpl::limpiar, domicilio::setMunicipio);
+            aplicar(request.getEstado(), ClienteServiceImpl::limpiar, domicilio::setEstado);
+            aplicar(request.getCodigoPostal(), UnaryOperator.identity(), domicilio::setCodigoPostal);
+            aplicar(request.getPais(), ClienteServiceImpl::mayusculas, domicilio::setPais);
             domicilioRepository.save(domicilio);
         });
 
         return aResponse(cliente, cuentaDe(cliente));
+    }
+
+    /** Si el valor viene (Optional presente), lo transforma y lo asigna; si no viene, no hace nada. */
+    private static void aplicar(String valor, UnaryOperator<String> transformacion, Consumer<String> asignar) {
+        Optional.ofNullable(valor).ifPresent(v -> asignar.accept(transformacion.apply(v)));
     }
 
     // ------------------------------------------------------------- Baja logica
@@ -368,10 +306,7 @@ public class ClienteServiceImpl implements ClienteService {
             cuentaRepository.save(cuenta);
         });
 
-        GenericResponse response = new GenericResponse();
-        response.setCodigo(0);
-        response.setMensaje("Cliente desactivado correctamente");
-        return response;
+        return GenericResponse.exito("Cliente desactivado correctamente");
     }
 
     // ---------------------------------------------------------------- Auxiliares
@@ -380,15 +315,6 @@ public class ClienteServiceImpl implements ClienteService {
         if (id == null || id <= 0) {
             throw new ValidacionNegocioException("El id del cliente debe ser un numero entero positivo");
         }
-    }
-
-    private String validarNumeroCuenta(String numeroCuenta) {
-        String numero = numeroCuenta == null ? "" : numeroCuenta.trim().toUpperCase(Locale.ROOT);
-        if (!PATRON_CUENTA.matcher(numero).matches()) {
-            throw new ValidacionNegocioException(
-                    "El numero de cuenta debe tener entre 6 y 30 caracteres, solo letras y numeros");
-        }
-        return numero;
     }
 
     private void validarMayoriaDeEdad(LocalDate fechaNacimiento) {
@@ -425,10 +351,6 @@ public class ClienteServiceImpl implements ClienteService {
                 .replaceAll("\\p{M}", "")
                 .toLowerCase(Locale.ROOT)
                 .trim();
-    }
-
-    private static String valorODefecto(String valor) {
-        return valor == null ? "" : valor;
     }
 
     private static String limpiar(String valor) {
