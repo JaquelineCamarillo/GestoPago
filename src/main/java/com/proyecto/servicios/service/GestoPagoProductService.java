@@ -7,12 +7,16 @@ import java.util.List;
 public interface GestoPagoProductService {
 
     /**
-     * Llama a GestoPago (getProductList.do) y guarda/actualiza el catalogo en la BD local.
-     * Segun la documentacion de GestoPago, este metodo solo puede llamarse hasta 3 veces
-     * al dia o se bloquea la IP; por eso corre programado 1 vez al dia.
+     * Llama a GestoPago (getProductList.do) y guarda el catalogo. Prioriza Redis; si no
+     * esta disponible, usa la BD local (Postgres) como respaldo.
      */
     void sincronizarCatalogo();
 
-    /** Lee el catalogo desde la BD local. Nunca llama a GestoPago en vivo. */
-    List<GestoPagoProductoResponse> listarProductosDisponibles();
+    /**
+     * Lista el catalogo (Redis primero, BD local como respaldo).
+     * @param tipoFront si viene null, regresa todo el catalogo. Si viene con un valor
+     *                  (1, 2, 4, 5, 30, 31...), regresa solo los productos de ese tipo.
+     *                  Los productos sin tipoFront (null) se normalizan a 0 al guardarse.
+     */
+    List<GestoPagoProductoResponse> listarProductosDisponibles(Integer tipoFront);
 }

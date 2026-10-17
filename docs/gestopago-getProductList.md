@@ -13,7 +13,7 @@ DTOs → Configuración).
 - `OpenApi.java` no tenía `@Configuration`, por lo que Spring nunca registraba el bean
   `OpenAPI`.
 
-## Decisión clave: cachear el catálogo en base de datos
+## Decisión clave: cachear el catálogo (Redis, con Postgres de respaldo)
 La documentación oficial de GestoPago advierte explícitamente:
 
 > *"This method can only be used up to 3 times in a single day, otherwise the IP will be
@@ -22,12 +22,24 @@ La documentación oficial de GestoPago advierte explícitamente:
 
 Por eso el diseño NO llama a GestoPago en cada request del frontend. En su lugar:
 - Un **job programado** (`@Scheduled`, una vez al día — configurable por
-  `gestopago.productos.sync-cron`) sincroniza el catálogo completo hacia la tabla local
-  `gestopago_productos`.
-- El endpoint público `GET /gestopago/productos` **siempre lee de la base de datos**,
-  nunca invoca a GestoPago en vivo.
+  `gestopago.productos.sync-cron`) sincroniza el catálogo completo hacia **Redis**, que es
+  el caché principal: se guarda como un solo objeto (`GestoPagoCatalogoCacheDto`) bajo la
+  llave `gestopago:productos`.
+- Si Redis no está disponible al sincronizar, el catálogo se guarda en la tabla local
+  `gestopago_productos` (respaldo en Postgres).
+- El endpoint público `GET /gestopago/productos` **lee de Redis** y, si Redis no responde,
+  **de la base de datos**. Nunca invoca a GestoPago en vivo.
 - Se agregó `POST /gestopago/productos/sincronizar` para disparar la sincronización
   manualmente durante pruebas/demo, sin esperar al cron.
+
+## Respuesta del catálogo
+- **Orden:** los productos se devuelven por **precio ascendente**. El precio llega como
+  texto (`"100.0"`), así que se convierte a número para ordenar; los precios vacíos o no
+  numéricos van al final y, a igual precio, se ordena por nombre.
+- **Filtro:** `GET /gestopago/productos?tipoFront=2` devuelve solo los productos de ese
+  tipo; sin el parámetro devuelve todo el catálogo.
+- Muchos productos del catálogo real tienen precio `0.0` (montos variables), por eso
+  aparecen primero.
 
 ## Formato de respuesta: XML, no JSON
 A diferencia de otros endpoints de la API que devuelven JSON, `getProductList.do`
@@ -44,7 +56,8 @@ incluso con HTTP 200 — por eso la sincronización valida ese código y no solo
 Se mantiene la convención `gestopago.auth.*` ya usada por el proyecto y se agrega
 `gestopago.api.url` para el endpoint de negocio. Las credenciales (`id-distribuidor`,
 `codigo-dispositivo`, `password`) se resuelven **siempre** desde variables de entorno —
-nunca quedan hardcodeadas en el código ni en el repositorio.
+nunca quedan hardcodeadas en el código ni en el repositorio. La conexión a Redis también
+se configura por variables (`REDIS_HOST`, `REDIS_PORT`, `REDIS_PASSWORD`, `REDIS_SSL`).
 
 ## Arquitectura implementada
 | Capa | Clase |
@@ -52,8 +65,9 @@ nunca quedan hardcodeadas en el código ni en el repositorio.
 | Controller | `GestoPagoProductController` — `GET /gestopago/productos`, `POST /gestopago/productos/sincronizar` |
 | Service | `GestoPagoProductService` / `GestoPagoProductServiceImpl` |
 | Client/Integration | `GestoPagoProductClient` (Feign, XML) |
-| DTOs | `GestoPagoProductoXml`, `GestoPagoMensajeXml`, `GestoPagoProductListXmlResponse`, `GestoPagoProductoResponse` |
-| Entidad/Repositorio | `GestoPagoProducto`, `GestoPagoProductoRepository` |
+| DTOs | `GestoPagoProductoXml`, `GestoPagoMensajeXml`, `GestoPagoProductListXmlResponse`, `GestoPagoProductoResponse`, `GestoPagoCatalogoCacheDto` |
+| Entidad/Repositorio | `GestoPagoProducto`, `GestoPagoProductoRepository` (respaldo en Postgres) |
+| Caché | Redis (`RedisTemplate`), llave `gestopago:productos` |
 | Mapper | `GestoPagoProductMapper` (MapStruct, XML → Entidad) |
 | Configuración | `GestoPagoFeignConfig` (timeouts + `ErrorDecoder` compartido) |
 
@@ -84,8 +98,8 @@ inventar una causa.
 
 ## Registro y monitoreo
 Se registra INICIO y FIN de cada sincronización, incluyendo el número de productos
-sincronizados. Los errores se registran con `log.error(...)`, sin exponer password ni
-token completo en ningún log.
+sincronizados, y de dónde se leyó el catálogo (Redis o base de datos). Los errores se
+registran con `log.error(...)`, sin exponer password ni token completo en ningún log.
 
 ## Calidad de código
 - Inyección de dependencias por constructor en todas las clases nuevas.
@@ -93,18 +107,21 @@ token completo en ningún log.
   `GestoPagoProductClient` (sin duplicar timeouts ni manejo de errores).
 - Excepciones de negocio separadas de las técnicas (Feign), para no acoplar la capa de
   servicio al detalle de transporte HTTP.
+- La lectura del catálogo no falla si Redis cae: se degrada a la base de datos.
 
 ## Pruebas unitarias
 `GestoPagoProductServiceImplTest` cubre: sincronización exitosa, código de negocio no
 exitoso, token expirado con reintento automático, credenciales inválidas, error
-inesperado no controlado, y lectura del catálogo desde la base de datos (sin llamar a
-GestoPago).
+inesperado no controlado, lectura del catálogo desde Redis, lectura desde la base de
+datos cuando Redis no está disponible (sin llamar a GestoPago) y filtro por `tipoFront`.
 
 ## Cómo probar
 1. Configurar variables de entorno: `DB_URL`, `DB_USERNAME`, `DB_PASSWORD`,
-   `GESTOPAGO_ID_DISTRIBUIDOR`, `GESTOPAGO_CODIGO_DISPOSITIVO`, `GESTOPAGO_PASSWORD`.
+   `GESTOPAGO_ID_DISTRIBUIDOR`, `GESTOPAGO_CODIGO_DISPOSITIVO`, `GESTOPAGO_PASSWORD`,
+   y las de Redis (`REDIS_HOST`, `REDIS_PORT`, `REDIS_PASSWORD`, `REDIS_SSL`).
 2. Ejecutar `./gradlew test --tests "*.GestoPagoProductServiceImplTest"`.
 3. Ejecutar `./gradlew bootRun`.
 4. `POST http://localhost:8081/gestopago/productos/sincronizar` para forzar la
    sincronización.
-5. `GET http://localhost:8081/gestopago/productos` para ver el catálogo guardado.
+5. `GET http://localhost:8081/gestopago/productos` para ver el catálogo (ordenado por
+   precio ascendente) y `GET .../gestopago/productos?tipoFront=2` para filtrarlo.
