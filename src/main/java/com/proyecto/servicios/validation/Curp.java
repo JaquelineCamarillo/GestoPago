@@ -15,7 +15,8 @@ import java.util.Optional;
 
 /**
  * Valida que el texto sea una CURP bien formada.
- * Un valor nulo o vacio se considera valido aqui; para exigirlo se combina con @NotBlank.
+ * - Un valor nulo se considera valido aqui (se exige con @NotBlank o con un parametro obligatorio).
+ * - Una cadena vacia o solo con espacios NO es valida.
  */
 @Documented
 @Constraint(validatedBy = Curp.Validador.class)
@@ -33,7 +34,7 @@ public @interface Curp {
 
         @Override
         public boolean isValid(String valor, ConstraintValidatorContext contexto) {
-            if (valor == null || valor.isBlank()) {
+            if (valor == null) {
                 return true;
             }
             Optional<String> error = CurpValidador.validar(valor);
