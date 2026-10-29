@@ -81,6 +81,8 @@ class ClienteServiceImplTest {
 
         assertEquals("Juana", response.getNombre());
         assertNotNull(response.getNumeroCuenta());
+        assertEquals(16, response.getNumeroCuenta().length());
+        assertTrue(response.getNumeroCuenta().matches("^\\d{16}$"));
         assertEquals("ACTIVA", response.getEstatusCuenta());
         assertEquals(0.0, response.getSaldo());
         verify(cuentaRepository, times(1)).save(any(Cuenta.class));
