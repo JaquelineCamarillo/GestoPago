@@ -5,6 +5,7 @@ import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.OptBoolean;
 import com.proyecto.servicios.validation.CodigoPais;
 import com.proyecto.servicios.validation.Curp;
+import com.proyecto.servicios.validation.NumeroCuenta;
 import com.proyecto.servicios.validation.Rfc;
 import io.swagger.v3.oas.annotations.media.Schema;
 import jakarta.validation.constraints.AssertTrue;
@@ -55,9 +56,8 @@ public class BuscarClienteRequest {
     @Schema(example = "juana@example.com")
     private String correoElectronico;
 
-    @Pattern(regexp = "^[A-Za-z0-9]{6,30}$",
-            message = "El numero de cuenta debe tener entre 6 y 30 caracteres, solo letras y numeros, sin espacios")
-    @Schema(example = "7654321A1B2C")
+    @NumeroCuenta
+    @Schema(example = "7904852077759512")
     private String numeroCuenta;
 
     @Pattern(regexp = "^[HMXON]$",

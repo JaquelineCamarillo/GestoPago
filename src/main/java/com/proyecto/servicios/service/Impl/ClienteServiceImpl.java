@@ -15,6 +15,7 @@ import com.proyecto.servicios.repositorys.sf.CuentaRepository;
 import com.proyecto.servicios.repositorys.sf.DomicilioRepository;
 import com.proyecto.servicios.service.ClienteService;
 import com.proyecto.servicios.util.CurpValidador;
+import com.proyecto.servicios.util.GeneradorNumeroCuenta;
 import com.proyecto.servicios.util.RfcValidador;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Sort;
@@ -336,8 +337,7 @@ public class ClienteServiceImpl implements ClienteService {
     private String generarNumeroCuentaUnico() {
         String numeroCuenta;
         do {
-            numeroCuenta = String.valueOf(System.currentTimeMillis()).substring(1)
-                    + UUID.randomUUID().toString().substring(0, 4).toUpperCase();
+            numeroCuenta = GeneradorNumeroCuenta.generar();
         } while (cuentaRepository.findByNumeroCuenta(numeroCuenta).isPresent());
         return numeroCuenta;
     }
