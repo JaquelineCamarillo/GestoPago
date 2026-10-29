@@ -1,5 +1,6 @@
 package com.proyecto.servicios.controller;
 
+import com.proyecto.servicios.model.CuentaAbonoRequest;
 import com.proyecto.servicios.model.CuentaConsultaRequest;
 import com.proyecto.servicios.model.GenericResponse;
 import com.proyecto.servicios.service.CuentaService;
@@ -44,5 +45,12 @@ public class CuentaController {
     public ResponseEntity<GenericResponse> consultarSaldo(@Valid @RequestBody CuentaConsultaRequest request) {
         return ResponseEntity.ok(GenericResponse.exito("Consulta realizada correctamente",
                 cuentaService.consultarSaldo(request.getNumeroCuenta())));
+    }
+
+    @PostMapping(value = "/abonar", consumes = MediaType.APPLICATION_JSON_VALUE)
+    @Operation(summary = "Abona saldo a una cuenta activa")
+    public ResponseEntity<GenericResponse> abonarSaldo(@Valid @RequestBody CuentaAbonoRequest request) {
+        return ResponseEntity.ok(GenericResponse.exito("Abono realizado correctamente",
+                cuentaService.abonarSaldo(request.getNumeroCuenta(), request.getMonto())));
     }
 }

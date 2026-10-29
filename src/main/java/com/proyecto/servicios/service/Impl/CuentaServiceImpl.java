@@ -2,11 +2,15 @@ package com.proyecto.servicios.service.Impl;
 
 import com.proyecto.servicios.entity.sf.Cuenta;
 import com.proyecto.servicios.exception.clientes.CuentaNoEncontradaException;
+import com.proyecto.servicios.exception.clientes.ValidacionNegocioException;
 import com.proyecto.servicios.model.CuentaResponse;
 import com.proyecto.servicios.repositorys.sf.CuentaRepository;
 import com.proyecto.servicios.service.CuentaService;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
+import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.util.List;
 import java.util.Locale;
 import java.util.stream.Collectors;
@@ -35,6 +39,23 @@ public class CuentaServiceImpl implements CuentaService {
     @Override
     public Double consultarSaldo(String numeroCuenta) {
         return buscar(numeroCuenta).getSaldo();
+    }
+
+    @Override
+    @Transactional
+    public CuentaResponse abonarSaldo(String numeroCuenta, BigDecimal monto) {
+        Cuenta cuenta = buscar(numeroCuenta);
+        Cuenta bloqueada = cuentaRepository.findByIdForUpdate(cuenta.getId()).orElse(cuenta);
+        if (!"ACTIVA".equalsIgnoreCase(bloqueada.getEstatus())) {
+            throw new ValidacionNegocioException("La cuenta " + bloqueada.getNumeroCuenta() + " no se encuentra ACTIVA");
+        }
+        BigDecimal saldoActual = bloqueada.getSaldo() == null
+                ? BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP)
+                : BigDecimal.valueOf(bloqueada.getSaldo()).setScale(2, RoundingMode.HALF_UP);
+        BigDecimal nuevoSaldo = saldoActual.add(monto.setScale(2, RoundingMode.HALF_UP)).setScale(2, RoundingMode.HALF_UP);
+        bloqueada.setSaldo(nuevoSaldo.doubleValue());
+        cuentaRepository.save(bloqueada);
+        return aResponse(bloqueada);
     }
 
     private Cuenta buscar(String numeroCuenta) {

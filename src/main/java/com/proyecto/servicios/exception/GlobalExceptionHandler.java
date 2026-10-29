@@ -19,6 +19,17 @@ import com.proyecto.servicios.exception.gestopago.GestoPagoBadResponseException;
 import com.proyecto.servicios.exception.gestopago.GestoPagoCommunicationException;
 import com.proyecto.servicios.exception.gestopago.GestoPagoTimeoutException;
 import com.proyecto.servicios.exception.gestopago.GestoPagoTokenUnavailableException;
+import com.proyecto.servicios.exception.pagos.CodigoConfirmacionExpiradoException;
+import com.proyecto.servicios.exception.pagos.CodigoConfirmacionInvalidoException;
+import com.proyecto.servicios.exception.pagos.EstadoPagoInvalidoException;
+import com.proyecto.servicios.exception.pagos.IntentosCodigoAgotadosException;
+import com.proyecto.servicios.exception.pagos.OperacionNoAutorizadaException;
+import com.proyecto.servicios.exception.pagos.PagoDuplicadoException;
+import com.proyecto.servicios.exception.pagos.PagoNoEncontradoException;
+import com.proyecto.servicios.exception.pagos.PagoRechazadoProveedorException;
+import com.proyecto.servicios.exception.pagos.ProductoCatalogoException;
+import com.proyecto.servicios.exception.pagos.SaldoInsuficienteException;
+import com.proyecto.servicios.exception.pagos.SesionInvalidaException;
 import com.proyecto.servicios.model.GenericResponse;
 import jakarta.validation.ConstraintViolationException;
 import lombok.extern.slf4j.Slf4j;
@@ -100,6 +111,49 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(CredencialesInvalidasException.class)
     public ResponseEntity<GenericResponse> handleCredenciales(CredencialesInvalidasException ex) {
         return construirConEstatus(HttpStatus.UNAUTHORIZED, ex.getMessage());
+    }
+
+    // ------------------------------------------------------------------- Pagos
+
+    @ExceptionHandler(PagoNoEncontradoException.class)
+    public ResponseEntity<GenericResponse> handlePagoNoEncontrado(PagoNoEncontradoException ex) {
+        return construirConEstatus(HttpStatus.NOT_FOUND, ex.getMessage());
+    }
+
+    @ExceptionHandler({SesionInvalidaException.class, CodigoConfirmacionInvalidoException.class})
+    public ResponseEntity<GenericResponse> handleSesionOCodigoInvalido(RuntimeException ex) {
+        return construirConEstatus(HttpStatus.UNAUTHORIZED, ex.getMessage());
+    }
+
+    @ExceptionHandler(OperacionNoAutorizadaException.class)
+    public ResponseEntity<GenericResponse> handleOperacionNoAutorizada(OperacionNoAutorizadaException ex) {
+        return construirConEstatus(HttpStatus.FORBIDDEN, ex.getMessage());
+    }
+
+    @ExceptionHandler(ProductoCatalogoException.class)
+    public ResponseEntity<GenericResponse> handleProductoCatalogo(ProductoCatalogoException ex) {
+        HttpStatus status = ex.isNoEncontrado() ? HttpStatus.NOT_FOUND : HttpStatus.UNPROCESSABLE_ENTITY;
+        return construirConEstatus(status, ex.getMessage());
+    }
+
+    @ExceptionHandler({SaldoInsuficienteException.class, PagoRechazadoProveedorException.class})
+    public ResponseEntity<GenericResponse> handleUnprocessable(RuntimeException ex) {
+        return construirConEstatus(HttpStatus.UNPROCESSABLE_ENTITY, ex.getMessage());
+    }
+
+    @ExceptionHandler({PagoDuplicadoException.class, EstadoPagoInvalidoException.class})
+    public ResponseEntity<GenericResponse> handleConflictoPago(RuntimeException ex) {
+        return construirConEstatus(HttpStatus.CONFLICT, ex.getMessage());
+    }
+
+    @ExceptionHandler(CodigoConfirmacionExpiradoException.class)
+    public ResponseEntity<GenericResponse> handleCodigoExpirado(CodigoConfirmacionExpiradoException ex) {
+        return construirConEstatus(HttpStatus.GONE, ex.getMessage());
+    }
+
+    @ExceptionHandler(IntentosCodigoAgotadosException.class)
+    public ResponseEntity<GenericResponse> handleIntentosAgotados(IntentosCodigoAgotadosException ex) {
+        return construirConEstatus(HttpStatus.LOCKED, ex.getMessage());
     }
 
     // ---------------------------------------------------- Validacion de entrada
