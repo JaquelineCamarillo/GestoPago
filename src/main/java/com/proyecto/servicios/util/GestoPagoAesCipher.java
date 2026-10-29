@@ -90,7 +90,7 @@ public class GestoPagoAesCipher {
         if (keyBase64 == null || keyBase64.isBlank()
                 || vectorInicializacionBase64 == null || vectorInicializacionBase64.isBlank()) {
             throw new GestoPagoCommunicationException(
-                    "Faltan las variables de cifrado de GestoPago (GESTOPAGO_SECRET_KEY y GESTOPAGO_IV)");
+                    "Faltan las variables de cifrado de GestoPago (GESTOPAGO_SECRET_KEY y GESTOPAGO_IV)", null);
         }
     }
 }
